@@ -21,6 +21,7 @@ import io
 from neo4j import GraphDatabase
 import argparse
 import fcntl
+import traceback
 
 # ---------- Constants & paths (defaults, can be overridden by args) ---------------------
 DEFAULT_DATA_FILE = "merged_data_nyse.csv"
@@ -291,6 +292,49 @@ def log_token_usage(ticker: str, quarter: str, agent_type: str, model: str,
         log_entry.to_csv(combined_log_path, index=False)
     else:
         log_entry.to_csv(combined_log_path, mode="a", header=False, index=False)
+
+def log_tracker_summary(ticker: str, quarter: str, agent_type: str, tracker) -> None:
+    """Helper to log token usage from an agent's TokenTracker."""
+    if tracker is None or not hasattr(tracker, "get_summary"):
+        return
+    summary = tracker.get_summary()
+    input_tokens = summary.get("input_tokens", 0)
+    output_tokens = summary.get("output_tokens", 0)
+    if (input_tokens or 0) == 0 and (output_tokens or 0) == 0:
+        return  # Skip agents that were never called
+    model = summary.get("model") or "unknown"
+    cost = summary.get("cost_usd")
+    log_token_usage(
+        ticker=ticker,
+        quarter=quarter,
+        agent_type=agent_type,
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost,
+    )
+
+def extract_direction_score(text: str) -> float | None:
+    """Extract 'Direction score' value from a research note string."""
+    if not text or not isinstance(text, str):
+        return None
+    match = re.search(r"Direction\s*score\s*of\s*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+def direction_from_score(score: float | None) -> str:
+    """Map numeric direction score to categorical label."""
+    if score is None:
+        return "unknown"
+    if score > 5:
+        return "UP"
+    if score < 5:
+        return "DOWN"
+    return "FLAT"
 
 def log_agent_timing(ticker: str, quarter: str, agent_type: str, 
                     start_time: float, end_time: float, status: str = "success"):
@@ -835,6 +879,8 @@ def process_sector(sector_df: pd.DataFrame, log_path: str = None) -> List[dict]:
                 "parsed_and_analyzed_facts": "[]",
                 "research_note" : "",
                 "actual_return" : row["future_3bday_cum_return"],
+                "predicted_direction": "",
+                "direction_score": "",
                 "error"         : "",
             }
 
@@ -910,6 +956,16 @@ def process_sector(sector_df: pd.DataFrame, log_path: str = None) -> List[dict]:
                 with openai_semaphore:
                     parsed = main_agent.run(transcript_facts, row, mem_block, None, financial_statements_facts_str)
 
+                # --- Token usage logging ---
+                log_tracker_summary(ticker, quarter, "main_agent", main_agent.token_tracker)
+                helper_trackers = [
+                    ("comparative_agent", getattr(main_agent.comparative_agent, "token_tracker", None)),
+                    ("financials_agent", getattr(main_agent.financials_agent, "token_tracker", None)),
+                    ("past_calls_agent", getattr(main_agent.past_calls_agent, "token_tracker", None)),
+                ]
+                for agent_name, tracker in helper_trackers:
+                    log_tracker_summary(ticker, quarter, agent_name, tracker)
+
 
                 # Index transcript facts immediately
                 if transcript_facts:
@@ -936,8 +992,16 @@ def process_sector(sector_df: pd.DataFrame, log_path: str = None) -> List[dict]:
                     ]
                     summary_txt = (parsed.get("summary") or "").strip()
                     result_dict["research_note"] = "\n\n".join([p for p in parts if p] + [summary_txt]).strip()
+                    score = extract_direction_score(result_dict["research_note"])
+                    result_dict["direction_score"] = score if score is not None else ""
+                    result_dict["predicted_direction"] = direction_from_score(score)
                 result_dict["error"] = ""
             except Exception as e:
+                error_msg = f"[ERROR][{ticker}/{quarter}] {type(e).__name__}: {e}"
+                print("\n" + "=" * 80)
+                print(error_msg)
+                traceback.print_exc()
+                print("=" * 80 + "\n")
                 result_dict["error"] = str(e)
 
             # Incremental log write
@@ -969,7 +1033,9 @@ def initialize_log_file(log_path: str) -> None:
     pd.DataFrame(
         columns=[
             "ticker", "quarter", "parsed_and_analyzed_facts",
-            "research_note", "actual_return", "error"
+            "research_note", "actual_return",
+            "predicted_direction", "direction_score",
+            "error"
         ]
     ).to_csv(log_path, index=False)
 

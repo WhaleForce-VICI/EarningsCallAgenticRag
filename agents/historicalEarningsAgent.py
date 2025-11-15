@@ -149,7 +149,7 @@ class HistoricalEarningsAgent:
                             MATCH (f:Fact {ticker: $ticker})
                             OPTIONAL MATCH (f)-[:HAS_VALUE]->(v:Value)
                             OPTIONAL MATCH (f)-[:EXPLAINED_BY]->(r:Reason)
-                            WHERE exists(f.embedding)
+                            WHERE f.embedding IS NOT NULL
                             RETURN f.metric AS metric, v.content AS value, r.content AS reason, f.embedding AS embedding, f.quarter AS quarter, f.type AS type
                             """,
                             ticker=ticker

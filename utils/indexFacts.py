@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 import concurrent.futures
 
 from neo4j import GraphDatabase
+from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
 from openai import OpenAI
 
 from agents.prompts.prompts import facts_extraction_prompt
@@ -57,6 +59,7 @@ class IndexFacts:
     # ------------------------------------------------------------------
     def __init__(self, credentials_file: str, openai_model: str = "gpt-4o-mini"):
         creds = json.loads(Path(credentials_file).read_text())
+        self._creds = creds  # Save for reconnect attempts
         self.client = OpenAI(api_key=creds["openai_api_key"])
         self.model = openai_model
         self.driver = GraphDatabase.driver(
@@ -64,6 +67,18 @@ class IndexFacts:
         )
         self.create_fact_metric_index()
         self._ensure_schema()
+        
+    def _reconnect_driver(self):
+        """Recreate the Neo4j driver using cached credentials."""
+        try:
+            if self.driver:
+                self.driver.close()
+        except Exception:
+            pass
+        creds = self._creds
+        self.driver = GraphDatabase.driver(
+            creds["neo4j_uri"], auth=(creds["neo4j_username"], creds["neo4j_password"])
+        )
 
     
     # ------------------------------------------------------------------
@@ -260,8 +275,29 @@ class IndexFacts:
 
         # Step 2: Write all facts in a single transaction
         if facts_with_embeddings:
-            with self.driver.session() as ses:
-                ses.write_transaction(self._batch_write_tx, facts_with_embeddings)
+            self._execute_write_with_retry(self._batch_write_tx, facts_with_embeddings)
+
+    def _execute_write_with_retry(self, handler, *args, max_attempts: int = 3):
+        """Run a write transaction with retry logic for transient Neo4j failures."""
+        attempt = 0
+        last_err = None
+        while attempt < max_attempts:
+            attempt += 1
+            try:
+                with self.driver.session() as ses:
+                    exec_write = getattr(ses, "execute_write", None) or getattr(ses, "write_transaction")
+                    return exec_write(handler, *args)
+            except (ServiceUnavailable, SessionExpired) as exc:
+                last_err = exc
+                print(f"[Neo4j] Connection issue (attempt {attempt}/{max_attempts}): {exc}")
+                self._reconnect_driver()
+                time.sleep(min(2 * attempt, 5))
+            except Neo4jError as exc:
+                last_err = exc
+                print(f"[Neo4j] Write failed: {exc}")
+                break
+        if last_err:
+            raise last_err
 
     
     def process_transcript(self, transcript: str, ticker: str, quarter: str) -> List[Dict[str, Any]]:
@@ -275,7 +311,8 @@ class IndexFacts:
         return facts  # Return the canonical fact format instead of triples
 
     def close(self):
-        self.driver.close()
+        if self.driver:
+            self.driver.close()
 
     # ------------------------------------------------------------------
     def create_qoq_comparisons(self, ticker: str, current_quarter: str, previous_quarter: str):

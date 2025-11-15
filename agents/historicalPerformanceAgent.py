@@ -153,7 +153,7 @@ class HistoricalPerformanceAgent:
                             MATCH (f:Fact {ticker: $ticker, type: 'Result'})
                             OPTIONAL MATCH (f)-[:HAS_VALUE]->(v:Value)
                             OPTIONAL MATCH (f)-[:EXPLAINED_BY]->(r:Reason)
-                            WHERE exists(f.embedding)
+                            WHERE f.embedding IS NOT NULL
                             RETURN f.metric AS metric, v.content AS value, r.content AS reason, f.embedding AS embedding, f.quarter AS quarter, f.type AS type
                             """,
                             ticker=ticker
@@ -170,6 +170,7 @@ class HistoricalPerformanceAgent:
                     except Exception as e2:
                         print(f"[ERROR] Fallback similarity search failed in get_similar_facts_by_embedding: {e2}")
                         return None
+            driver.close()
         except Exception as e:
             print(f"[ERROR] get_similar_facts_by_embedding failed: {e}")
             return None
