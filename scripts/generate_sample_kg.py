@@ -18,7 +18,12 @@ from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
-from pyvis.network import Network
+import sys
+
+try:
+    from pyvis.network import Network
+except ImportError:  # pragma: no cover - optional dependency
+    Network = None
 
 
 def parse_items(cell: str | float) -> list[dict]:
@@ -99,8 +104,21 @@ def add_fact_nodes(
             net.add_edge(tool_id, fact_id, title="contributed")
 
 
+def write_placeholder(output_path: Path, message: str) -> None:
+    output_path.write_text(
+        f"""<html><body><h3>KG 無法產生</h3><p>{message}</p></body></html>""",
+        encoding="utf-8",
+    )
+
+
 def build_graph(csv_path: Path, output_path: Path) -> None:
+    if Network is None:
+        write_placeholder(output_path, "pyvis 未安裝，已跳過圖形生成。")
+        return
     df = pd.read_csv(csv_path)
+    if df.empty:
+        write_placeholder(output_path, "沒有可視化的資料。")
+        return
     net = Network(
         height="100%",
         width="100%",
@@ -119,9 +137,13 @@ def build_graph(csv_path: Path, output_path: Path) -> None:
         add_fact_nodes(net, str(row["ticker"]), str(row["quarter"]), facts)
 
     if not net.nodes:
-        raise SystemExit("No facts found to visualize.")
+        write_placeholder(output_path, "沒有可視化的節點。")
+        return
 
-    net.show(str(output_path))
+    try:
+        net.show(str(output_path))
+    except Exception as exc:
+        write_placeholder(output_path, f"生成 KG 時發生錯誤：{exc}")
 
 
 def main() -> None:

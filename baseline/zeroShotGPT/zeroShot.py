@@ -9,23 +9,22 @@ baseline_orchestrator.py ─ Minimal LLM baseline with return threshold logic
 
 # --- Imports -----------------------------------------------------------
 import os
-import json
 import pandas as pd
 import openai
 from typing import Dict
 from pathlib import Path
+import sys
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 from prompts import baseline_prompt
+from utils.env_config import get_openai_api_key
 
 # --- Config ------------------------------------------------------------
-credentials_file = "credentials.json"
-creds = json.loads(Path(credentials_file).read_text())
-
 DATA_PATH  = "transcripts_nasdaq.csv"
 LOG_PATH   = "baseline_nasdaq3.csv"
 MODEL      = "gpt-3.5-turbo"
 RETURN_THRESHOLD = 0.05  # 5%
 
-openai.api_key = creds["openai_api_key"]
+openai.api_key = get_openai_api_key()
 
 # --- Load full earnings-call metadata ----------------------------------
 df = pd.read_csv(DATA_PATH)
@@ -119,4 +118,3 @@ for _, row in df.iterrows():
         })
 
 print("\n🎯 Baseline processing done!")
-

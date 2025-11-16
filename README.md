@@ -52,15 +52,14 @@ pip install openai pandas numpy scikit-learn tqdm neo4j transformers torch accel
 
 ### Configuration
 
-1. **Configure credentials**: Update `credentials.json` with your API keys and database credentials:
-   ```json
-   {
-     "openai_api_key": "your-openai-api-key",
-     "neo4j_uri": "your-neo4j-database-uri",
-     "neo4j_username": "your-neo4j-username", 
-     "neo4j_password": "your-neo4j-password"
-   }
+1. **設定環境變數**：複製 `.env.example` 為 `.env`，填入 OpenAI 與 Neo4j 憑證：
+   ```env
+   OPENAI_API_KEY=sk-...
+   NEO4J_URI=neo4j+s://<host>.databases.neo4j.io
+   NEO4J_USERNAME=neo4j
+   NEO4J_PASSWORD=<your-password>
    ```
+   所有模組（LLM 與 Neo4j）皆會自動從 `.env` / 系統環境變數載入設定。
 
 ## Usage
 

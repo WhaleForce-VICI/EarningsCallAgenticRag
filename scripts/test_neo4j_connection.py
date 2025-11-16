@@ -1,34 +1,24 @@
 #!/usr/bin/env python3
 """
-Quick Neo4j connectivity check.
-
-Reads credentials (default: credentials.json), opens a driver, runs a simple
-read query, and reports cluster info. Fails loud if authentication or network
-is misconfigured.
+Quick Neo4j connectivity check using environment variables (.env supported).
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 from neo4j import GraphDatabase
 from neo4j.exceptions import Neo4jError
 
-
-def load_credentials(path: Path) -> dict:
-    if not path.exists():
-        raise FileNotFoundError(f"Credentials file not found: {path}")
-    try:
-        return json.loads(path.read_text())
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON in {path}") from exc
+import sys
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+from utils.env_config import get_neo4j_credentials, load_env_file
 
 
 def test_connection(creds: dict) -> dict:
     driver = GraphDatabase.driver(
-        creds["neo4j_uri"], auth=(creds["neo4j_username"], creds["neo4j_password"])
+        creds["uri"], auth=(creds["username"], creds["password"])
     )
     try:
         with driver.session() as session:
@@ -75,23 +65,16 @@ def fetch_cluster_state(session):
 
 def main():
     parser = argparse.ArgumentParser(description="Test Neo4j database connectivity.")
-    parser.add_argument(
-        "--credentials",
-        type=Path,
-        default=Path("credentials.json"),
-        help="Path to credentials JSON (default: credentials.json)",
-    )
+    parser.add_argument("--env-file", type=Path, help="Optional .env file to load before connecting.")
     args = parser.parse_args()
 
+    if args.env_file:
+        load_env_file(args.env_file)
+
     try:
-        creds = load_credentials(args.credentials)
+        creds = get_neo4j_credentials()
     except Exception as exc:
-        raise SystemExit(f"❌ Failed to load credentials: {exc}")
-
-    missing = [k for k in ("neo4j_uri", "neo4j_username", "neo4j_password") if k not in creds]
-    if missing:
-        raise SystemExit(f"❌ Missing keys in credentials: {', '.join(missing)}")
-
+        raise SystemExit(f"❌ Failed to read env credentials: {exc}")
     try:
         info = test_connection(creds)
     except Neo4jError as exc:

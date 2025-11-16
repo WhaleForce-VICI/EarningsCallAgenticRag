@@ -19,6 +19,7 @@ import concurrent.futures
 from neo4j import GraphDatabase
 from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
 from openai import OpenAI
+from utils.env_config import get_openai_api_key, get_neo4j_credentials
 
 from agents.prompts.prompts import facts_extraction_prompt
 
@@ -57,13 +58,23 @@ class IndexFacts:
     """
 
     # ------------------------------------------------------------------
-    def __init__(self, credentials_file: str, openai_model: str = "gpt-4o-mini"):
-        creds = json.loads(Path(credentials_file).read_text())
-        self._creds = creds  # Save for reconnect attempts
-        self.client = OpenAI(api_key=creds["openai_api_key"])
+    def __init__(self, credentials_file: str | None = None, openai_model: str = "gpt-4o-mini"):
+        if credentials_file:
+            creds_json = json.loads(Path(credentials_file).read_text())
+            openai_key = creds_json["openai_api_key"]
+            neo_creds = {
+                "uri": creds_json["neo4j_uri"],
+                "username": creds_json["neo4j_username"],
+                "password": creds_json["neo4j_password"],
+            }
+        else:
+            openai_key = get_openai_api_key()
+            neo_creds = get_neo4j_credentials()
+        self._neo_creds = neo_creds  # Save for reconnect attempts
+        self.client = OpenAI(api_key=openai_key)
         self.model = openai_model
         self.driver = GraphDatabase.driver(
-            creds["neo4j_uri"], auth=(creds["neo4j_username"], creds["neo4j_password"])
+            neo_creds["uri"], auth=(neo_creds["username"], neo_creds["password"])
         )
         self.create_fact_metric_index()
         self._ensure_schema()
@@ -75,9 +86,9 @@ class IndexFacts:
                 self.driver.close()
         except Exception:
             pass
-        creds = self._creds
+        creds = self._neo_creds
         self.driver = GraphDatabase.driver(
-            creds["neo4j_uri"], auth=(creds["neo4j_username"], creds["neo4j_password"])
+            creds["uri"], auth=(creds["username"], creds["password"])
         )
 
     

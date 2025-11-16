@@ -29,6 +29,7 @@ from agents.prompts.prompts import (
     main_agent_prompt,        # fact‑level verdict
     # Add import for formatting QoQ facts
 )
+from utils.env_config import get_openai_api_key
 
 # ---------------------------------------------------------------------------
 # Parsing helpers
@@ -116,10 +117,12 @@ class MainAgent:
 
     # ------------ init ----------------------------------------------------
     def __post_init__(self):
+        api_key = None
         cred_path = Path(self.credentials_file or self.credentials_path or "")
-        if not cred_path.exists():
-            raise FileNotFoundError("Credentials file not found.")
-        api_key = json.loads(cred_path.read_text())["openai_api_key"]
+        if cred_path and cred_path.exists():
+            api_key = json.loads(cred_path.read_text())["openai_api_key"]
+        else:
+            api_key = get_openai_api_key()
         self.client = OpenAI(api_key=api_key)
 
     # ------------ internal LLM helper ------------------------------------

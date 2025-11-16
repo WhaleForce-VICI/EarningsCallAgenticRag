@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_openai import OpenAIEmbeddings
 from neo4j import GraphDatabase
 from openai import OpenAI
+from utils.env_config import get_openai_api_key, get_neo4j_credentials
 
 from agents.prompts.prompts import comparative_agent_prompt
 
@@ -55,14 +56,24 @@ class TokenTracker:
 class ComparativeAgent:
     """Compare a batch of facts against peer data stored in Neo4j."""
 
-    def __init__(self, credentials_file: str = "credentials.json", model: str = "gpt-4o-mini", sector_map: dict = None) -> None:
-        creds = json.loads(Path(credentials_file).read_text())
-        self.client = OpenAI(api_key=creds["openai_api_key"])
+    def __init__(self, credentials_file: str | None = None, model: str = "gpt-4o-mini", sector_map: dict = None) -> None:
+        if credentials_file:
+            creds_json = json.loads(Path(credentials_file).read_text())
+            openai_key = creds_json["openai_api_key"]
+            neo_creds = {
+                "uri": creds_json["neo4j_uri"],
+                "username": creds_json["neo4j_username"],
+                "password": creds_json["neo4j_password"],
+            }
+        else:
+            openai_key = get_openai_api_key()
+            neo_creds = get_neo4j_credentials()
+        self.client = OpenAI(api_key=openai_key)
         self.model = model
         self.driver = GraphDatabase.driver(
-            creds["neo4j_uri"], auth=(creds["neo4j_username"], creds["neo4j_password"])
+            neo_creds["uri"], auth=(neo_creds["username"], neo_creds["password"])
         )
-        self.embedder = OpenAIEmbeddings(openai_api_key=creds["openai_api_key"])
+        self.embedder = OpenAIEmbeddings(openai_api_key=openai_key)
         self.token_tracker = TokenTracker()
         self.sector_map = sector_map or {}
 

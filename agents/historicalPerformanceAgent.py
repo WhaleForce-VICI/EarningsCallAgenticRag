@@ -8,13 +8,13 @@ past financial statements in a single prompt.
 from __future__ import annotations
 from pathlib import Path
 import json
-from pathlib import Path
 from typing import List, Dict, Any, Optional
 import numpy as np
 import re
 
 from openai import OpenAI
 from agents.prompts.prompts import financials_statement_agent_prompt
+from utils.env_config import get_openai_api_key, get_neo4j_credentials
 
 # -------------------------------------------------------------------------
 # Token tracking
@@ -52,11 +52,21 @@ class TokenTracker:
 class HistoricalPerformanceAgent:
     """Compare current-quarter facts with prior financial statements."""
 
-    def __init__(self, credentials_file: str = "credentials.json", model: str = "gpt-4o-mini") -> None:
-        creds = json.loads(Path(credentials_file).read_text())
-        self.client = OpenAI(api_key=creds["openai_api_key"])
+    def __init__(self, credentials_file: str | None = None, model: str = "gpt-4o-mini") -> None:
+        if credentials_file:
+            creds_json = json.loads(Path(credentials_file).read_text())
+            openai_key = creds_json["openai_api_key"]
+            self._neo_creds = {
+                "uri": creds_json["neo4j_uri"],
+                "username": creds_json["neo4j_username"],
+                "password": creds_json["neo4j_password"],
+            }
+        else:
+            openai_key = get_openai_api_key()
+            self._neo_creds = get_neo4j_credentials()
+        self._openai_key = openai_key
+        self.client = OpenAI(api_key=openai_key)
         self.model = model
-        self.credentials_file = credentials_file  # Save as instance attribute
         self.token_tracker = TokenTracker()
 
     # ------------------------------------------------------------------
@@ -90,9 +100,9 @@ class HistoricalPerformanceAgent:
                     print(f"[ERROR] Embedding creation failed in get_similar_facts_by_embedding: {e}")
                     return None
             from neo4j import GraphDatabase
-            creds = json.loads(Path(self.credentials_file).read_text())
+            creds = self._neo_creds
             driver = GraphDatabase.driver(
-                creds["neo4j_uri"], auth=(creds["neo4j_username"], creds["neo4j_password"])
+                creds["uri"], auth=(creds["username"], creds["password"])
             )
             with driver.session() as session:
                 try:
@@ -253,9 +263,8 @@ class HistoricalPerformanceAgent:
     def generate_embeddings_for_facts(self, batch_size: int = 50):
         """Generate and store embeddings for Fact nodes using ticker, metric, and type as input."""
         from openai import OpenAI
-        creds = json.loads(Path(self.credentials_file).read_text())
         driver = self.driver
-        client = OpenAI(api_key=creds["openai_api_key"])
+        client = OpenAI(api_key=self._openai_key)
 
         with driver.session() as session:
             # Fetch all Fact nodes missing an embedding

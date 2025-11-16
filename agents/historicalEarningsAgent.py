@@ -13,6 +13,7 @@ import re
 
 from langchain_openai import OpenAIEmbeddings
 from agents.prompts.prompts import historical_earnings_agent_prompt
+from utils.env_config import get_openai_api_key, get_neo4j_credentials
 
 # -------------------------------------------------------------------------
 # Token tracking
@@ -50,14 +51,25 @@ class TokenTracker:
 class HistoricalEarningsAgent:
     """Compare current facts with the firm's own historical facts."""
 
-    def __init__(self, credentials_file: str = "credentials.json", model: str = "gpt-4o-mini") -> None:
-        creds = json.loads(Path(credentials_file).read_text())
-        self.client = OpenAI(api_key=creds["openai_api_key"])
+    def __init__(self, credentials_file: str | None = None, model: str = "gpt-4o-mini") -> None:
+        if credentials_file:
+            creds_json = json.loads(Path(credentials_file).read_text())
+            openai_key = creds_json["openai_api_key"]
+            self._neo_creds = {
+                "uri": creds_json["neo4j_uri"],
+                "username": creds_json["neo4j_username"],
+                "password": creds_json["neo4j_password"],
+            }
+        else:
+            openai_key = get_openai_api_key()
+            self._neo_creds = get_neo4j_credentials()
+        self._openai_key = openai_key
+        self.client = OpenAI(api_key=openai_key)
         self.model = model
         self.driver = GraphDatabase.driver(
-            creds["neo4j_uri"], auth=(creds["neo4j_username"], creds["neo4j_password"])
+            self._neo_creds["uri"], auth=(self._neo_creds["username"], self._neo_creds["password"])
         )
-        self.embedder = OpenAIEmbeddings(openai_api_key=creds["openai_api_key"])
+        self.embedder = OpenAIEmbeddings(openai_api_key=openai_key)
         self.token_tracker = TokenTracker()
 
     # ------------------------------------------------------------------
@@ -88,7 +100,6 @@ class HistoricalEarningsAgent:
                     input=text
                 ).data[0].embedding
             from neo4j import GraphDatabase
-            creds = json.loads(Path(self.driver._uri.split('bolt://')[-1].split(':')[0] + '/credentials.json').read_text()) if hasattr(self.driver, '_uri') else json.loads(Path('credentials.json').read_text())
             driver = self.driver
             with driver.session() as session:
                 try:

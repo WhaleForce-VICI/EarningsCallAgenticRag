@@ -22,6 +22,7 @@ from neo4j import GraphDatabase
 import argparse
 import fcntl
 import traceback
+from utils.env_config import get_neo4j_credentials
 
 # ---------- Constants & paths (defaults, can be overridden by args) ---------------------
 DEFAULT_DATA_FILE = "merged_data_nyse.csv"
@@ -115,11 +116,11 @@ class Neo4jFileLock:
                 print(f"Warning: Error releasing Neo4j lock: {e}")
 
 def get_neo4j_driver():
-    """Get Neo4j driver from credentials file."""
-    creds = json.loads(Path("credentials.json").read_text())
+    """Get Neo4j driver from environment variables."""
+    creds = get_neo4j_credentials()
     return GraphDatabase.driver(
-        creds["neo4j_uri"], 
-        auth=(creds["neo4j_username"], creds["neo4j_password"])
+        creds["uri"],
+        auth=(creds["username"], creds["password"])
     )
 
 def clear_neo4j_database(driver, chunk_info: str = None):
@@ -835,12 +836,11 @@ def process_sector(sector_df: pd.DataFrame, log_path: str = None) -> List[dict]:
     print(f"🚀 Worker started for sector: {sector_name} with {len(sector_df)} rows")
 
     # ---------- 1) Initialize objects ONCE per worker (sector) -------
-    indexer = IndexFacts(credentials_file="credentials.json")
+    indexer = IndexFacts()
     main_agent = MainAgent(
-        credentials_file   = "credentials.json",
-        comparative_agent  = ComparativeAgent(credentials_file="credentials.json", sector_map=SECTOR_MAP_DICT),
-        financials_agent   = HistoricalPerformanceAgent(credentials_file="credentials.json"),
-        past_calls_agent   = HistoricalEarningsAgent(credentials_file="credentials.json"),
+        comparative_agent  = ComparativeAgent(sector_map=SECTOR_MAP_DICT),
+        financials_agent   = HistoricalPerformanceAgent(),
+        past_calls_agent   = HistoricalEarningsAgent(),
     )
 
     # --- I/O caching ---

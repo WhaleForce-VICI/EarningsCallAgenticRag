@@ -125,13 +125,10 @@ class RunManager:
     def _refresh_live_kg(self, record: RunRecord, source: Path, *, final: bool) -> None:
         run_dir = self.get_run_directory(record.run_id)
         target = run_dir / ("kg_graph.html" if final else "kg_live.html")
-        try:
-            self._generate_kg(source, target)
-            if final:
-                record.kg_path = target
-                self._commit(record)
-        except Exception:
-            pass
+        self._generate_kg(source, target)
+        if final:
+            record.kg_path = target
+            self._commit(record)
 
     def list_runs(self) -> list[RunRecord]:
         with self._lock:
@@ -254,26 +251,10 @@ class RunManager:
                 shutil.copy(generated_csv, dest_csv)
                 record.results_csv = dest_csv
                 record.live_results_path = dest_csv
-                # Generate KG graph
-                kg_path = run_path / "kg_graph.html"
                 try:
-                    subprocess.run(
-                        [
-                            sys.executable,
-                            "scripts/generate_sample_kg.py",
-                            "--input",
-                            str(dest_csv),
-                            "--output",
-                            str(kg_path),
-                        ],
-                        cwd=str(REPO_ROOT),
-                        check=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                    )
-                    record.kg_path = kg_path
-                except subprocess.CalledProcessError as exc:
-                    record.error = f"KG generation failed: {exc.stderr.decode(errors='ignore')}"
+                    self._refresh_live_kg(record, dest_csv, final=True)
+                except Exception as exc:
+                    record.error = f"KG generation failed: {exc}"
             else:
                 record.error = f"Expected results file not found: {generated_csv}"
 
