@@ -107,6 +107,7 @@ def build_graph(csv_path: Path, output_path: Path) -> None:
         notebook=False,
         bgcolor="#FFFFFF",
         font_color="#2C3E50",
+        cdn_resources="in_line",
     )
     net.prep_notebook()
     net.barnes_hut()

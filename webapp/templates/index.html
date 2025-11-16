@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Earnings Call Agentic RAG – Web Console</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+</head>
+<body>
+<header>
+    <h1>Earnings Call Agentic RAG</h1>
+    <p>Configure and launch orchestrator runs, review outputs, and visualize the Knowledge Graph directly in your browser.</p>
+</header>
+
+<main>
+    <section class="card">
+        <h2>Start a new run</h2>
+        <form method="post" action="/run" class="grid-form">
+            <label>
+                Data file (CSV)
+                <input type="text" name="data_file" value="{{ defaults.data_file }}" required>
+            </label>
+            <label>
+                Sector map
+                <input type="text" name="sector_map" value="{{ defaults.sector_map }}" required>
+            </label>
+            <label>
+                Max workers
+                <input type="number" min="1" name="max_workers" value="{{ defaults.max_workers }}" required>
+            </label>
+            <label>
+                Chunk size
+                <input type="number" min="1" name="chunk_size" value="{{ defaults.chunk_size }}" required>
+            </label>
+            <label>
+                Timeout (seconds)
+                <input type="number" min="30" name="timeout" value="{{ defaults.timeout }}" required>
+            </label>
+            <div class="actions">
+                <button type="submit">Launch Run</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="card">
+        <h2>瀏覽既有結果</h2>
+        <p>輸入 run ID 直接開啟既有執行結果，無需重新跑流程。</p>
+        <form id="load-run-form" class="load-form">
+            <input type="text" id="run-id-input" placeholder="例如：3218373a" required>
+            <button type="submit">開啟結果</button>
+        </form>
+    </section>
+
+    <section class="card">
+        <h2>Recent runs</h2>
+        {% if runs %}
+        <table>
+            <thead>
+            <tr>
+                <th>ID</th>
+                <th>Data</th>
+                <th>Sector Map</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for run in runs %}
+                <tr>
+                    <td><code>{{ run.run_id }}</code></td>
+                    <td>{{ run.config.data_file }}</td>
+                    <td>{{ run.config.sector_map }}</td>
+                    <td class="status {{ run.status }}">{{ run.status }}</td>
+                    <td>{{ run.created_at | datetime }}</td>
+                    <td><a href="/runs/{{ run.run_id }}">Details</a></td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+            <p>No runs yet. Configure your first run above.</p>
+        {% endif %}
+    </section>
+</main>
+
+<script>
+const loadForm = document.getElementById("load-run-form");
+loadForm?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const value = document.getElementById("run-id-input").value.trim();
+    if (value) {
+        window.location.href = `/runs/${value}`;
+    }
+});
+</script>
+
+</body>
+</html>

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Run {{ run.run_id }} – Earnings Call Agentic RAG</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+</head>
+<body>
+<header>
+    <h1>Run <code>{{ run.run_id }}</code></h1>
+    <p>Status: <span id="status-label" class="status {{ run.status }}">{{ run.status }}</span></p>
+    <p><a href="/">← Back to dashboard</a></p>
+    {% if run.total_rows %}
+    <div class="progress-wrapper">
+        <div class="progress-info">
+            <strong id="progress-label">{{ run.completed_rows }}/{{ run.total_rows }}</strong>
+            <span>rows processed</span>
+        </div>
+        <progress id="progress-bar" max="{{ run.total_rows }}" value="{{ run.completed_rows }}"></progress>
+    </div>
+    {% endif %}
+</header>
+
+<main>
+    <section class="card">
+        <h2>Configuration</h2>
+        <dl class="definition">
+            <dt>Data file</dt><dd>{{ run.config.data_file }}</dd>
+            <dt>Sector map</dt><dd>{{ run.config.sector_map }}</dd>
+            <dt>Max workers</dt><dd>{{ run.config.max_workers }}</dd>
+            <dt>Chunk size</dt><dd>{{ run.config.chunk_size }}</dd>
+            <dt>Timeout</dt><dd>{{ run.config.timeout }} s</dd>
+            <dt>Created</dt><dd>{{ run.created_at | datetime }}</dd>
+            <dt>Finished</dt><dd>{{ run.finished_at | datetime }}</dd>
+        </dl>
+        <div class="actions">
+            {% if run.results_csv %}
+                <a class="button" href="/runs/{{ run.run_id }}/results.csv">Download CSV</a>
+                <a class="button" href="/runs/{{ run.run_id }}/results.json">Download JSON</a>
+            {% endif %}
+            <a class="button secondary" href="/runs/{{ run.run_id }}/log">Download Log</a>
+        </div>
+        {% if run.error %}
+            <p class="warning">Note: {{ run.error }}</p>
+        {% endif %}
+    </section>
+
+    <section class="card">
+        <h2>Predictions</h2>
+        {% if results_preview %}
+            <table>
+                <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Quarter</th>
+                    <th>Direction</th>
+                    <th>Score</th>
+                    <th>Actual Return</th>
+                    <th>Error</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for row in results_preview %}
+                    <tr>
+                        <td>{{ row.ticker }}</td>
+                        <td>{{ row.quarter }}</td>
+                        <td class="status {{ row.predicted_direction | lower }}">{{ row.predicted_direction }}</td>
+                        <td>{{ row.direction_score }}</td>
+                        <td>{{ row.actual_return }}</td>
+                        <td>{{ row.error }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            <p class="small-note">Showing up to {{ results_preview|length }} rows. Download the CSV for full output.</p>
+        {% else %}
+            <p>No results generated yet.</p>
+        {% endif %}
+    </section>
+
+    <section class="card">
+        <h2>Knowledge Graph</h2>
+        {% if run.kg_path %}
+            <iframe src="/runs/{{ run.run_id }}/kg" title="Knowledge Graph" class="kg-frame"></iframe>
+        {% else %}
+            <p>尚未產生 KG 視覺化。請等待執行完成或檢查 run log。</p>
+        {% endif %}
+    </section>
+
+    <section class="card">
+        <div class="log-header">
+            <h2>Log output</h2>
+            <span id="log-updated"></span>
+        </div>
+        <pre class="log" id="log-output">{{ log }}</pre>
+    </section>
+</main>
+
+<script>
+const runId = "{{ run.run_id }}";
+const statusLabel = document.getElementById("status-label");
+const progressBar = document.getElementById("progress-bar");
+const progressLabel = document.getElementById("progress-label");
+const logOutput = document.getElementById("log-output");
+const logUpdated = document.getElementById("log-updated");
+let logCache = logOutput ? logOutput.textContent : "";
+
+async function pollRun() {
+    try {
+        const [runResp, logResp] = await Promise.all([
+            fetch(`/api/runs/${runId}`),
+            fetch(`/api/runs/${runId}/log`)
+        ]);
+        if (!runResp.ok) throw new Error("run api error");
+        const runData = await runResp.json();
+        const run = runData.run;
+        if (statusLabel) {
+            statusLabel.textContent = run.status;
+            statusLabel.className = `status ${run.status}`;
+        }
+        if (progressBar && run.total_rows) {
+            progressBar.max = run.total_rows;
+            progressBar.value = run.completed_rows || 0;
+            if (progressLabel) {
+                progressLabel.textContent = `${run.completed_rows}/${run.total_rows}`;
+            }
+        }
+        if (logResp.ok) {
+            const logData = await logResp.json();
+            if (logOutput && typeof logData.log === "string") {
+                const incoming = logData.log;
+                if (logCache && incoming.startsWith(logCache)) {
+                    logOutput.textContent = logCache + incoming.slice(logCache.length);
+                } else {
+                    logOutput.textContent = incoming;
+                }
+                logCache = logOutput.textContent;
+                if (logUpdated) {
+                    const timestamp = new Date().toLocaleTimeString();
+                    logUpdated.textContent = `最後更新：${timestamp}`;
+                }
+            }
+        }
+        if (run.status === "running") {
+            setTimeout(pollRun, 4000);
+        }
+    } catch (err) {
+        console.error(err);
+        setTimeout(pollRun, 6000);
+    }
+}
+
+pollRun();
+</script>
+
+</body>
+</html>

@@ -320,6 +320,8 @@ def extract_direction_score(text: str) -> float | None:
         return None
     match = re.search(r"Direction\s*score\s*of\s*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
     if not match:
+        match = re.search(r"Direction\s*[:：]\s*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
+    if not match:
         return None
     try:
         return float(match.group(1))

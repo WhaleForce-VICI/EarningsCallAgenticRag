@@ -64,9 +64,27 @@ pip install openai pandas numpy scikit-learn tqdm neo4j transformers torch accel
 
 ## Usage
 
-### Running the Main Orchestrator
+### React 單頁 Web Console
 
-The main agentic RAG system processes earnings calls using multiple specialized agents:
+1. 安裝前端依賴並建置：
+   ```bash
+   cd webapp/frontend
+   npm install
+   npm run build
+   ```
+
+2. 啟動 FastAPI + SPA：
+   ```bash
+   source .venv/bin/activate
+   uvicorn webapp.app:app --reload
+   ```
+
+3. 開啟 <http://localhost:8000/>：
+   - 右側控制台可從下拉選擇 `sample_data.csv`、`merged_data_nyse.csv`、`merged_data_nasdaq.csv`、`maec_transcripts.csv` 等資料集。
+   - 送出表單後會建立新的 run，前端即時顯示進度、log、結果表格以及 live KG（執行中會持續重繪 `kg_live.html`）。
+   - Dashboard 的「瀏覽既有結果」可輸入既有 run ID 直接重看，不需重新執行。
+
+### 直接以 CLI 執行 orchestrator（可供除錯）
 
 ```bash
 # Process NYSE data (default)
@@ -94,7 +112,7 @@ python orchestrator_parallel_facts.py \
 - `--chunk-size`: Process tickers in chunks (default: 300)
 - `--timeout`: Timeout per call in seconds (default: 1000)
 
-**Output**: Results are saved to `{dataset_name}_results.csv` with predictions and analysis.
+**Output**: Results are saved to `{dataset_name}_results.csv` with predictions and analysis（Web console 會複製到 `Results/web_runs/<run_id>/results.csv` 並顯示在前端）。
 
 ### Running Baseline Methods
 
