@@ -32,6 +32,10 @@ MAX_WORKERS = 10    # Number of parallel workers for facts indexation
 CHUNK_SIZE = 300    # Process 300 tickers per chunk
 OFFLINE_MODE = False  # set by CLI flag to skip LLM/Neo4j and emit heuristic output
 MAX_TRANSCRIPT_CHARS = 8000  # truncate transcripts to reduce token usage
+# 0 / None 表示不截斷
+FACT_LIMIT = 0
+CURRENT_QTR_FACT_LIMIT = 0
+TOP_K = 5
 
 # ---------- Token and Timing Logging ------------
 TOKEN_LOG_DIR = "token_logs"
@@ -855,9 +859,9 @@ def process_sector(sector_df: pd.DataFrame, log_path: str = None) -> List[dict]:
         try:
             indexer = IndexFacts()
             main_agent = MainAgent(
-                comparative_agent  = ComparativeAgent(sector_map=SECTOR_MAP_DICT),
-                financials_agent   = HistoricalPerformanceAgent(),
-                past_calls_agent   = HistoricalEarningsAgent(),
+                comparative_agent  = ComparativeAgent(sector_map=SECTOR_MAP_DICT, top_k=TOP_K),
+                financials_agent   = HistoricalPerformanceAgent(top_n=TOP_K),
+                past_calls_agent   = HistoricalEarningsAgent(top_k=TOP_K),
             )
         except Exception as init_exc:
             traceback.print_exc()
@@ -975,13 +979,16 @@ def process_sector(sector_df: pd.DataFrame, log_path: str = None) -> List[dict]:
 
                 truncated_transcript = truncate_text(row["transcript"], MAX_TRANSCRIPT_CHARS)
                 transcript_facts = indexer.process_transcript(truncated_transcript, ticker, quarter)
-                # Limit facts to reduce token usage
-                transcript_facts = transcript_facts[:15]
+                # Limit facts to reduce token usage (0/None => no limit)
+                if FACT_LIMIT:
+                    transcript_facts = transcript_facts[:FACT_LIMIT]
 
                 current_qtr_facts = [f for f in financial_facts if f.get('quarter') == quarter]
                 transcript_facts = (transcript_facts or [])
                 
-                curr_facts = (current_qtr_facts[:10]) + transcript_facts
+                if CURRENT_QTR_FACT_LIMIT:
+                    current_qtr_facts = current_qtr_facts[:CURRENT_QTR_FACT_LIMIT]
+                curr_facts = current_qtr_facts + transcript_facts
                 # 替換為截斷版本以降低主模型 prompt 長度
                 row_for_prompt = row.copy()
                 row_for_prompt["transcript"] = truncated_transcript
@@ -1117,6 +1124,10 @@ Examples:
         action="store_true",
         help="Run without LLM/Neo4j (outputs heuristic predictions only)."
     )
+    parser.add_argument("--fact-limit", type=int, default=FACT_LIMIT, help="Max transcript facts to send to main agent (0 = no limit)")
+    parser.add_argument("--current-fact-limit", type=int, default=CURRENT_QTR_FACT_LIMIT, help="Max current quarter financial facts (0 = no limit)")
+    parser.add_argument("--top-k", type=int, default=TOP_K, help="Top K similar facts for helper agents")
+    parser.add_argument("--max-rows", type=int, default=None, help="Only process the first N rows")
     
     return parser.parse_args()
 
@@ -1143,6 +1154,10 @@ def main() -> None:
     print(f"👥 Max workers: {args.max_workers}")
     print(f"📦 Chunk size: {args.chunk_size}")
     print(f"⏰ Timeout: {args.timeout}s")
+    global FACT_LIMIT, CURRENT_QTR_FACT_LIMIT, TOP_K
+    FACT_LIMIT = args.fact_limit
+    CURRENT_QTR_FACT_LIMIT = args.current_fact_limit
+    TOP_K = args.top_k
     
     start_time = time.time()
     
@@ -1168,6 +1183,8 @@ def main() -> None:
     # ------ 2) load & slice --------------------------------------------
     try:
         df = pd.read_csv(args.data).drop_duplicates()
+        if args.max_rows:
+            df = df.head(args.max_rows)
         print(f"📊 Loaded {len(df)} rows from {args.data}")
     except Exception as e:
         print(f"❌ Error loading data file {args.data}: {e}")
@@ -1245,14 +1262,28 @@ def main() -> None:
         print(f"🏭 Processing {len(sector_groups)} sectors in this chunk")
         
         # ------ 4) dispatch for current chunk ---------------
-        # 強制改成序列處理，避免多進程干擾/timeout
-        print(f"🔄 Sequential processing of {len(sector_groups)} sectors (max_workers ignored)...")
-        for grp in sector_groups:
-            try:
-                process_sector(grp, log_path)
-                print(f" ✅ finished sector {grp['sector'].iat[0]}")
-            except Exception as err:
-                print(f"❌ Error in sector {grp['sector'].iat[0]}: {err}")
+        if args.max_workers == 1 or len(sector_groups) <= 1:
+            print(f"🔄 Sequential processing of {len(sector_groups)} sectors (max_workers=1)")
+            for grp in sector_groups:
+                try:
+                    process_sector(grp, log_path)
+                    print(f" ✅ finished sector {grp['sector'].iat[0]}")
+                except Exception as err:
+                    print(f"❌ Error in sector {grp['sector'].iat[0]}: {err}")
+        else:
+            print(f"⚡ Parallel processing with up to {args.max_workers} workers ...")
+            with concurrent.futures.ProcessPoolExecutor(max_workers=args.max_workers) as executor:
+                future_to_sector = {
+                    executor.submit(process_sector, grp, log_path): grp["sector"].iat[0]
+                    for grp in sector_groups
+                }
+                for fut in concurrent.futures.as_completed(future_to_sector):
+                    sector = future_to_sector[fut]
+                    try:
+                        fut.result()
+                        print(f" ✅ finished sector {sector}")
+                    except Exception as err:
+                        print(f"❌ Error in sector {sector}: {err}")
         
         # ------ 5) Ensure all workers are terminated before database clearing ---------------
         print("🔄 Waiting for all workers to complete before database clearing...")

@@ -51,7 +51,7 @@ class TokenTracker:
 class HistoricalEarningsAgent:
     """Compare current facts with the firm's own historical facts."""
 
-    def __init__(self, credentials_file: str | None = None, model: str = "gpt-4o-mini") -> None:
+    def __init__(self, credentials_file: str | None = None, model: str = "gpt-4o-mini", top_k: int = 5) -> None:
         if credentials_file:
             creds_json = json.loads(Path(credentials_file).read_text())
             openai_key = creds_json["openai_api_key"]
@@ -71,6 +71,7 @@ class HistoricalEarningsAgent:
         )
         self.embedder = OpenAIEmbeddings(openai_api_key=openai_key)
         self.token_tracker = TokenTracker()
+        self.top_k = top_k
 
     # ------------------------------------------------------------------
     # Neo4j fetch helper (simple filter – same ticker, prior quarters)
@@ -212,7 +213,7 @@ class HistoricalEarningsAgent:
         facts: List[Dict[str, str]],
         ticker: str,
         quarter: str,
-        top_k: int = 5,  # Lowered from 50 to 10
+        top_k: int | None = None,
     ) -> str:
         """Batch: For each fact, find similar historical facts, aggregate, and run the LLM prompt once for the batch."""
         if not facts:
@@ -220,10 +221,11 @@ class HistoricalEarningsAgent:
 
         # Reset token tracker for this run
         self.token_tracker = TokenTracker()
+        effective_top_k = top_k or self.top_k
 
         all_similar = []
         for fact in facts:
-            similar_facts = self.get_similar_facts_by_embedding(fact, ticker, quarter, top_n=top_k)
+            similar_facts = self.get_similar_facts_by_embedding(fact, ticker, quarter, top_n=effective_top_k)
             if not similar_facts:
                 continue
             for sim in similar_facts:

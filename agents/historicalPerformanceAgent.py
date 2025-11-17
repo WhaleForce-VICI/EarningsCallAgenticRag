@@ -52,7 +52,7 @@ class TokenTracker:
 class HistoricalPerformanceAgent:
     """Compare current-quarter facts with prior financial statements."""
 
-    def __init__(self, credentials_file: str | None = None, model: str = "gpt-4o-mini") -> None:
+    def __init__(self, credentials_file: str | None = None, model: str = "gpt-4o-mini", top_n: int = 5) -> None:
         if credentials_file:
             creds_json = json.loads(Path(credentials_file).read_text())
             openai_key = creds_json["openai_api_key"]
@@ -68,6 +68,7 @@ class HistoricalPerformanceAgent:
         self.client = OpenAI(api_key=openai_key)
         self.model = model
         self.token_tracker = TokenTracker()
+        self.top_n = top_n
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -200,10 +201,11 @@ class HistoricalPerformanceAgent:
             return f"{year-1}-Q{q}"
         return quarter
 
-    def run(self, facts: List[Dict[str, str]], row, quarter, ticker: Optional[str] = None, top_n: int = 5) -> str:  # Lowered from 50 to 10
+    def run(self, facts: List[Dict[str, str]], row, quarter, ticker: Optional[str] = None, top_n: int | None = None) -> str:  # Lowered from 50 to 10
         """Batch: Compare all facts to all top-N similar past facts by embedding, and run the LLM prompt once for the batch."""
         if not facts:
             return "No facts provided."
+        effective_top_n = top_n or self.top_n
 
         # Reset token tracker for this run
         self.token_tracker = TokenTracker()
@@ -211,7 +213,7 @@ class HistoricalPerformanceAgent:
         from agents.prompts.prompts import financials_statement_agent_prompt
         all_similar = []
         for fact in facts:
-            similar_facts = self.get_similar_facts_by_embedding(fact, ticker or row.get("ticker"), quarter, top_n=top_n)
+            similar_facts = self.get_similar_facts_by_embedding(fact, ticker or row.get("ticker"), quarter, top_n=effective_top_n)
             # Filter out facts with no value or reason, and only keep those from previous quarters
             # Explicitly exclude the current quarter
             filtered_similar = [

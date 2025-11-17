@@ -56,7 +56,7 @@ class TokenTracker:
 class ComparativeAgent:
     """Compare a batch of facts against peer data stored in Neo4j."""
 
-    def __init__(self, credentials_file: str | None = None, model: str = "gpt-4o-mini", sector_map: dict = None) -> None:
+    def __init__(self, credentials_file: str | None = None, model: str = "gpt-4o-mini", sector_map: dict = None, top_k: int = 5) -> None:
         if credentials_file:
             creds_json = json.loads(Path(credentials_file).read_text())
             openai_key = creds_json["openai_api_key"]
@@ -76,6 +76,7 @@ class ComparativeAgent:
         self.embedder = OpenAIEmbeddings(openai_api_key=openai_key)
         self.token_tracker = TokenTracker()
         self.sector_map = sector_map or {}
+        self.top_k = top_k
 
     # ------------------------------------------------------------------
     # Vector search helper
@@ -217,22 +218,23 @@ class ComparativeAgent:
         quarter: str,
         peers: Sequence[str] | None = None,
         sector: str | None = None,
-        top_k: int = 5,  # Lowered from 50 to 10
+        top_k: int | None = None,
     ) -> str:
         """Analyse a batch of facts; return one consolidated LLM answer."""
         if not facts:
             return "No facts supplied."
         # Reset token tracker for this run
         self.token_tracker = TokenTracker()
+        effective_top_k = top_k or self.top_k
 
         # --- Per-fact similarity search and aggregation ---
         all_similar = []
         for fact in facts:
             query = self._to_query(fact)
             if sector:
-                similar = self._search_similar(query, ticker, top_k=top_k, sector=sector)
+                similar = self._search_similar(query, ticker, top_k=effective_top_k, sector=sector)
             else:
-                similar = self._search_similar(query, ticker, top_k=top_k)
+                similar = self._search_similar(query, ticker, top_k=effective_top_k)
             # Optionally, attach the current metric for context
             for sim in similar:
                 sim["current_metric"] = fact.get("metric", "")

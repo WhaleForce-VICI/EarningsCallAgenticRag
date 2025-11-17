@@ -53,9 +53,13 @@ def serialize_runs(records: list[RunRecord]) -> list[dict]:
 class RunPayload(BaseModel):
   data_file: str
   sector_map: str
-  max_workers: int = 1
-  chunk_size: int = 2
+  max_workers: int = 10
+  chunk_size: int = 300
   timeout: int = 120
+  fact_limit: int | None = None
+  current_fact_limit: int | None = None
+  top_k: int | None = None
+  max_rows: int | None = None
 
 
 @app.get("/api/options")
@@ -125,6 +129,95 @@ async def api_run_kg(run_id: str, live: int = Query(0)):
   if live_path.exists():
     return FileResponse(live_path, media_type="text/html")
   raise HTTPException(status_code=404, detail="KG graph not available")
+
+
+@app.delete("/api/history")
+async def api_clear_history():
+  import shutil
+  for folder in ["token_logs", "timing_logs", "Results/web_runs"]:
+    path = REPO_ROOT / folder
+    if path.exists():
+      for item in path.iterdir():
+        if item.is_file():
+          item.unlink(missing_ok=True)
+        elif item.is_dir():
+          shutil.rmtree(item, ignore_errors=True)
+  return {"status": "ok"}
+
+# ---- estimation helpers ----
+def _dataset_info():
+  info = []
+  for ds in DATASET_OPTIONS:
+    data_path = REPO_ROOT / ds["data_file"]
+    rows = None
+    if data_path.exists():
+      try:
+        rows = len(pd.read_csv(data_path))
+      except Exception:
+        rows = None
+    info.append({**ds, "rows": rows})
+  return info
+
+
+def _stats_from_logs():
+  token_path = REPO_ROOT / "token_logs" / "combined_token_usage.csv"
+  timing_path = REPO_ROOT / "timing_logs" / "combined_timing.csv"
+  avg_tokens = 20000
+  avg_time = 10.0
+  if token_path.exists():
+    try:
+      df = pd.read_csv(token_path)
+      if not df.empty and "total_tokens" in df.columns:
+        avg_tokens = df["total_tokens"].mean()
+    except Exception:
+      pass
+  if timing_path.exists():
+    try:
+      df = pd.read_csv(timing_path)
+      if not df.empty and "duration_seconds" in df.columns:
+        avg_time = df["duration_seconds"].mean()
+    except Exception:
+      pass
+  return avg_tokens, avg_time
+
+
+@app.get("/api/estimate")
+async def api_estimate(
+  data_file: str,
+  max_rows: int | None = None,
+  top_k: int | None = None,
+  fact_limit: int | None = None,
+  current_fact_limit: int | None = None,
+):
+  datasets = _dataset_info()
+  target = next((d for d in datasets if d["data_file"] == data_file), None)
+  if not target:
+    raise HTTPException(status_code=404, detail="data_file not found")
+  rows = target.get("rows") or 0
+  if max_rows is not None:
+    rows = min(rows, max_rows)
+  avg_tokens, avg_time = _stats_from_logs()
+  # 基準：Top-K=5, fact_limit=8000, current_fact_limit=8000，並限制放大倍數避免誇張估算
+  base_top_k = 5
+  base_fact_limit = 8000
+  base_curr_limit = 8000
+  scale = 1.0
+  if top_k:
+    scale *= min(top_k / base_top_k, 2.0)
+  if fact_limit:
+    scale *= min(fact_limit / base_fact_limit, 2.0)
+  if current_fact_limit:
+    scale *= min(current_fact_limit / base_curr_limit, 2.0)
+  total_tokens = avg_tokens * max(rows, 1) * scale
+  est_cost = total_tokens * 0.00002  # 粗估 gpt-4o-mini 混合成本
+  est_time = avg_time * max(rows, 1)
+  return {
+    "rows": rows,
+    "avg_tokens_per_row": avg_tokens,
+    "total_tokens": total_tokens,
+    "estimated_cost_usd": est_cost,
+    "estimated_time_seconds": est_time,
+  }
 
 
 @app.get("/api/runs/{run_id}/results.csv")

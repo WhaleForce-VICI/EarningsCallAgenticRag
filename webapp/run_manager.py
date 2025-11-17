@@ -160,7 +160,10 @@ class RunManager:
         log_path = run_path / "run.log"
         data_path = self._resolve_path(config["data_file"])
         sector_map_path = self._resolve_path(config["sector_map"])
+        max_rows = config.get("max_rows")
         total_rows = self._count_csv_rows(data_path)
+        if max_rows:
+            total_rows = min(total_rows or max_rows, max_rows)
         live_results = REPO_ROOT / f"{data_path.stem}_results.csv"
         normalized_config = {
             **config,
@@ -189,6 +192,10 @@ class RunManager:
         max_workers = str(config["max_workers"])
         chunk_size = str(config["chunk_size"])
         timeout = str(config["timeout"])
+        fact_limit = config.get("fact_limit")
+        current_fact_limit = config.get("current_fact_limit")
+        top_k = config.get("top_k")
+        max_rows = config.get("max_rows")
 
         cmd = [
             sys.executable,
@@ -204,6 +211,14 @@ class RunManager:
             "--timeout",
             timeout,
         ]
+        if fact_limit:
+            cmd.extend(["--fact-limit", str(fact_limit)])
+        if current_fact_limit:
+            cmd.extend(["--current-fact-limit", str(current_fact_limit)])
+        if top_k:
+            cmd.extend(["--top-k", str(top_k)])
+        if max_rows:
+            cmd.extend(["--max-rows", str(max_rows)])
         generated_csv = record.live_results_path or (REPO_ROOT / f"{data_path.stem}_results.csv")
         if generated_csv.exists():
             generated_csv.unlink()
