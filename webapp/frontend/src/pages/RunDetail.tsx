@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { fetchLog, fetchResults, fetchRun } from '../api';
 import type { RunRecord, RunResultRow } from '../types';
@@ -10,12 +10,7 @@ export default function RunDetail() {
   const [results, setResults] = useState<RunResultRow[]>([]);
   const [logText, setLogText] = useState('');
   const [error, setError] = useState<string | null>(null);
-
-  const kgSrc = useMemo(() => {
-    if (!runId) return '';
-    const live = run?.status === 'running' ? 1 : 0;
-    return `/api/runs/${runId}/kg?live=${live}&ts=${Date.now()}`;
-  }, [run, runId]);
+  const [kgUrl, setKgUrl] = useState<string>('');
 
   useEffect(() => {
     if (!runId) return;
@@ -27,6 +22,9 @@ export default function RunDetail() {
           fetchResults(runId),
         ]);
         setRun(runResp.run);
+        if (runResp.run?.kg_path && !kgUrl) {
+          setKgUrl(`/api/runs/${runId}/kg`);
+        }
         setLogText((prev) => {
           const incoming = logResp.log;
           if (incoming.startsWith(prev)) {
@@ -42,7 +40,7 @@ export default function RunDetail() {
     poll();
     const timer = setInterval(poll, 4000);
     return () => clearInterval(timer);
-  }, [runId]);
+  }, [runId, kgUrl]);
 
   if (!runId) {
     return <p>未指定 run ID</p>;
@@ -105,7 +103,7 @@ export default function RunDetail() {
       <section className="card">
         <h2>Knowledge Graph</h2>
         {run && (run.kg_path || run.status === 'running') ? (
-          <iframe src={kgSrc} title="kg" className="kg-frame" />
+          kgUrl ? <iframe src={kgUrl} title="kg" className="kg-frame" /> : <p>KG 已生成，請稍候載入...</p>
         ) : (
           <p>尚未產生 KG</p>
         )}

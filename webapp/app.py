@@ -96,7 +96,9 @@ async def api_run_results(run_id: str):
   for col in cols:
     if col not in df.columns:
       df[col] = ""
-  return JSONResponse(df[cols].to_dict(orient="records"))
+  clean_df = df[cols].replace({pd.NA: "", float("nan"): ""}).where(pd.notna(df), "")
+  clean_df = clean_df.replace([float("inf"), float("-inf")], "")
+  return JSONResponse(json.loads(clean_df.to_json(orient="records")))
 
 
 @app.get("/api/runs/{run_id}/log")

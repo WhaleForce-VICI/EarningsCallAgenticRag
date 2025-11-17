@@ -311,8 +311,6 @@ class RunManager:
                     if rows != record.completed_rows:
                         record.completed_rows = rows
                         self._commit(record)
-                        if record.live_results_path:
-                            self._refresh_live_kg(record, Path(record.live_results_path), final=False)
             stop_event.wait(interval)
 
 
