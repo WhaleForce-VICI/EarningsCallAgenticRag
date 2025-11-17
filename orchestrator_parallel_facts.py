@@ -30,6 +30,8 @@ DEFAULT_SECTOR_MAP = "gics_sector_map_nyse.csv"
 TIMEOUT_SEC = 1000  # 8+ minutes for each heavy call
 MAX_WORKERS = 10    # Number of parallel workers for facts indexation
 CHUNK_SIZE = 300    # Process 300 tickers per chunk
+OFFLINE_MODE = False  # set by CLI flag to skip LLM/Neo4j and emit heuristic output
+MAX_TRANSCRIPT_CHARS = 8000  # truncate transcripts to reduce token usage
 
 # ---------- Token and Timing Logging ------------
 TOKEN_LOG_DIR = "token_logs"
@@ -338,6 +340,17 @@ def direction_from_score(score: float | None) -> str:
     if score < 5:
         return "DOWN"
     return "FLAT"
+
+
+def truncate_text(text: str, max_chars: int = MAX_TRANSCRIPT_CHARS) -> str:
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    # 保留開頭和結尾各 20% 以免丟失結論
+    head = int(max_chars * 0.6)
+    tail = max_chars - head
+    return text[:head] + "\n...\n" + text[-tail:]
 
 def log_agent_timing(ticker: str, quarter: str, agent_type: str, 
                     start_time: float, end_time: float, status: str = "success"):
@@ -828,20 +841,27 @@ def process_sector(sector_df: pd.DataFrame, log_path: str = None) -> List[dict]:
     from agents.historicalEarningsAgent import HistoricalEarningsAgent
     import concurrent.futures
 
-    # --- cProfile setup ---
-    pr = cProfile.Profile()
-    pr.enable()
+    # --- cProfile setup (disabled for stability) ---
+    pr = None
 
     sector_name = sector_df.iloc[0]["sector"]
     print(f"🚀 Worker started for sector: {sector_name} with {len(sector_df)} rows")
 
     # ---------- 1) Initialize objects ONCE per worker (sector) -------
-    indexer = IndexFacts()
-    main_agent = MainAgent(
-        comparative_agent  = ComparativeAgent(sector_map=SECTOR_MAP_DICT),
-        financials_agent   = HistoricalPerformanceAgent(),
-        past_calls_agent   = HistoricalEarningsAgent(),
-    )
+    if OFFLINE_MODE:
+        indexer = None
+        main_agent = None
+    else:
+        try:
+            indexer = IndexFacts()
+            main_agent = MainAgent(
+                comparative_agent  = ComparativeAgent(sector_map=SECTOR_MAP_DICT),
+                financials_agent   = HistoricalPerformanceAgent(),
+                past_calls_agent   = HistoricalEarningsAgent(),
+            )
+        except Exception as init_exc:
+            traceback.print_exc()
+            raise init_exc
 
     # --- I/O caching ---
     if log_path is None:
@@ -887,78 +907,87 @@ def process_sector(sector_df: pd.DataFrame, log_path: str = None) -> List[dict]:
             }
 
             try:
-                if not check_financial_statement_files_exist(ticker):
-                    print(f"   - ⏭️ Skipping {ticker}/{quarter}: No financial statement files found")
-                    result_dict["error"] = "No financial statement files available"
-                    pd.DataFrame([result_dict]).to_csv(log_path, mode="a", header=False, index=False)
-                    continue
+                if OFFLINE_MODE:
+                    # Heuristic quick path: no LLM/Neo4j
+                    ret = row["future_3bday_cum_return"]
+                    score = 7 if ret > 0 else 3 if ret < 0 else 5
+                    result_dict.update({
+                        "parsed_and_analyzed_facts": "[]",
+                        "research_note": "Offline mode: heuristic direction based on future_3bday_cum_return.",
+                        "predicted_direction": direction_from_score(score),
+                        "direction_score": score,
+                        "error": "",
+                    })
+                else:
+                    if not check_financial_statement_files_exist(ticker):
+                        print(f"   - ⏭️ Skipping {ticker}/{quarter}: No financial statement files found")
+                        result_dict["error"] = "No financial statement files available"
+                        pd.DataFrame([result_dict]).to_csv(log_path, mode="a", header=False, index=False)
+                        continue
 
-                mem_block = None
-                if not processed_history.empty and (processed_history["ticker"] == ticker).any():
-                    quarter_col = "quarter" if "quarter" in processed_history.columns else "q"
-                    ticker_history = processed_history[processed_history["ticker"] == ticker]
-                    lines = ["Previously, you have made the following analysis on the firm in the past quarter:"]
-                    for r in memories_for(ticker_history):
-                        research_note = str(r.get('research_note', ''))
-                        match = re.search(r"(\*\*Summary:.*?Direction\s*:\s*\d{1,2}\*\*)", research_note, re.DOTALL)
-                        if match:
-                            summary_text = match.group(1).strip().replace('\n', ' ')
-                            quarter_key = 'quarter' if 'quarter' in r else 'q'
-                            lines.append(
-                                f"- {r[quarter_key]}:  {summary_text} "
-                                f"(Following your prediction, the firm realised a 1-day return of = {r['actual_return']:+.2%})"
-                            )
-                    if len(lines) > 1:
-                        mem_block = "\n".join(lines)
+                    mem_block = None
+                    if not processed_history.empty and (processed_history["ticker"] == ticker).any():
+                        quarter_col = "quarter" if "quarter" in processed_history.columns else "q"
+                        ticker_history = processed_history[processed_history["ticker"] == ticker]
+                        lines = ["Previously, you have made the following analysis on the firm in the past quarter:"]
+                        for r in memories_for(ticker_history):
+                            research_note = str(r.get('research_note', ''))
+                            match = re.search(r"(\*\*Summary:.*?Direction\s*:\s*\d{1,2}\*\*)", research_note, re.DOTALL)
+                            if match:
+                                summary_text = match.group(1).strip().replace('\n', ' ')
+                                quarter_key = 'quarter' if 'quarter' in r else 'q'
+                                lines.append(
+                                    f"- {r[quarter_key]}:  {summary_text} "
+                                    f"(Following your prediction, the firm realised a 1-day return of = {r['actual_return']:+.2%})"
+                                )
+                        if len(lines) > 1:
+                            mem_block = "\n".join(lines)
 
-                # --- Use cached statement data ---
-                statement_data = get_statement(ticker)
-                # You may need to adapt generate_financial_statement_facts to accept preloaded data
-                financial_facts = generate_financial_statement_facts(row, ticker, quarter)
-                if financial_facts:
-                    # Parallelize triple conversion and embedding/indexing
-                    def triples_for_chunk(chunk):
-                        return indexer._to_triples(chunk, ticker, quarter)
-                    CHUNK_SIZE = 20
-                    triples = []
-                    with concurrent.futures.ThreadPoolExecutor() as pool:
-                        future_to_chunk = [pool.submit(triples_for_chunk, financial_facts[i:i+CHUNK_SIZE])
-                                           for i in range(0, len(financial_facts), CHUNK_SIZE)]
-                        for fut in concurrent.futures.as_completed(future_to_chunk):
-                            triples.extend(fut.result())
-                    # Index these triples immediately before main agent call
-                    if triples:
-                        indexer._push(triples)
+                    # --- Use cached statement data ---
+                    statement_data = get_statement(ticker)
+                    financial_facts = generate_financial_statement_facts(row, ticker, quarter)
+                    if financial_facts:
+                        def triples_for_chunk(chunk):
+                            return indexer._to_triples(chunk, ticker, quarter)
+                        CHUNK_SIZE = 20
+                        triples = []
+                        with concurrent.futures.ThreadPoolExecutor() as pool:
+                            future_to_chunk = [pool.submit(triples_for_chunk, financial_facts[i:i+CHUNK_SIZE])
+                                               for i in range(0, len(financial_facts), CHUNK_SIZE)]
+                            for fut in concurrent.futures.as_completed(future_to_chunk):
+                                triples.extend(fut.result())
+                        if triples:
+                            indexer._push(triples)
 
-                # Format and include only YoYChange facts in the financial statements section
-                def format_yoy_facts(yoy_facts):
-                    if not yoy_facts:
-                        return "No year-over-year changes available."
-                    lines = []
-                    for f in yoy_facts:
-                        metric = f.get('metric', '?')
-                        value = f.get('value', '?')
-                        quarter = f.get('quarter', '?')
-                        reason = f.get('reason', '')
-                        lines.append(f"• {metric}: {value} ({quarter}) {reason}")
-                    return '\n'.join(lines)
-                yoy_facts = [f for f in financial_facts if f.get('type') == 'YoYChange']
-                financial_statements_facts_str = f"YoY Financial Statements Facts (Last 4 Quarters):\n" + format_yoy_facts(yoy_facts)
+                    def format_yoy_facts(yoy_facts):
+                        if not yoy_facts:
+                            return "No year-over-year changes available."
+                        lines = []
+                        for f in yoy_facts:
+                            metric = f.get('metric', '?')
+                            value = f.get('value', '?')
+                            quarter = f.get('quarter', '?')
+                            reason = f.get('reason', '')
+                            lines.append(f"• {metric}: {value} ({quarter}) {reason}")
+                        return '\n'.join(lines)
+                    yoy_facts = [f for f in financial_facts if f.get('type') == 'YoYChange']
+                    financial_statements_facts_str = f"YoY Financial Statements Facts (Last 4 Quarters):\n" + format_yoy_facts(yoy_facts)
 
-                transcript_facts = indexer.process_transcript(row["transcript"], ticker, quarter)
+                truncated_transcript = truncate_text(row["transcript"], MAX_TRANSCRIPT_CHARS)
+                transcript_facts = indexer.process_transcript(truncated_transcript, ticker, quarter)
+                # Limit facts to reduce token usage
+                transcript_facts = transcript_facts[:15]
 
                 current_qtr_facts = [f for f in financial_facts if f.get('quarter') == quarter]
                 transcript_facts = (transcript_facts or [])
                 
-                curr_facts = current_qtr_facts + transcript_facts
-                # Only feed quarter-on-quarter (QoQ) change facts into the main agent
-                #qoq_facts = [f for f in transcript_facts if f.get('type') == 'QoQChange']
-                #print(f"Filtered to {len(qoq_facts)} QoQChange facts for main agent.")
-                #print("Sample QoQChange facts:", qoq_facts[:3])
+                curr_facts = (current_qtr_facts[:10]) + transcript_facts
+                # 替換為截斷版本以降低主模型 prompt 長度
+                row_for_prompt = row.copy()
+                row_for_prompt["transcript"] = truncated_transcript
                 with openai_semaphore:
-                    parsed = main_agent.run(transcript_facts, row, mem_block, None, financial_statements_facts_str)
+                    parsed = main_agent.run(transcript_facts, row_for_prompt, mem_block, None, financial_statements_facts_str)
 
-                # --- Token usage logging ---
                 log_tracker_summary(ticker, quarter, "main_agent", main_agent.token_tracker)
                 helper_trackers = [
                     ("comparative_agent", getattr(main_agent.comparative_agent, "token_tracker", None)),
@@ -968,8 +997,6 @@ def process_sector(sector_df: pd.DataFrame, log_path: str = None) -> List[dict]:
                 for agent_name, tracker in helper_trackers:
                     log_tracker_summary(ticker, quarter, agent_name, tracker)
 
-
-                # Index transcript facts immediately
                 if transcript_facts:
                     def triples_for_chunk(chunk):
                         return indexer._to_triples(chunk, ticker, quarter)
@@ -982,7 +1009,6 @@ def process_sector(sector_df: pd.DataFrame, log_path: str = None) -> List[dict]:
                             transcript_triples.extend(fut.result())
                     if transcript_triples:
                         indexer._push(transcript_triples)
-
 
                 result_dict["parsed_and_analyzed_facts"] = json.dumps(parsed or {})
                 if isinstance(parsed, dict):
@@ -1018,14 +1044,6 @@ def process_sector(sector_df: pd.DataFrame, log_path: str = None) -> List[dict]:
             indexer.close()
         except:
             pass
-
-    # --- cProfile summary ---
-    pr.disable()
-    s = io.StringIO()
-    ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
-    ps.print_stats(30)  # Top 30 lines
-    print(f"\n[cProfile] Top 30 functions for sector {sector_name}:")
-    print(s.getvalue())
 
     return []
 
@@ -1094,6 +1112,12 @@ Examples:
         help=f"Timeout in seconds for each agent call (default: {TIMEOUT_SEC})"
     )
     
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Run without LLM/Neo4j (outputs heuristic predictions only)."
+    )
+    
     return parser.parse_args()
 
 # ==================================================
@@ -1110,6 +1134,8 @@ def main() -> None:
     """
     # Parse command line arguments
     args = parse_arguments()
+    global OFFLINE_MODE
+    OFFLINE_MODE = bool(args.offline)
     
     print("🚀 Starting Parallel Facts Indexation with Agents and Memory")
     print(f"📁 Data file: {args.data}")
@@ -1183,22 +1209,24 @@ def main() -> None:
     
     print(f"📊 Processing {total_tickers} unique tickers in {total_chunks} chunks of {args.chunk_size}")
     
-    # Initialize Neo4j driver
-    try:
-        neo4j_driver = get_neo4j_driver()
-        print("✅ Neo4j driver initialized successfully")
-    except Exception as e:
-        print(f"❌ Failed to initialize Neo4j driver: {e}")
-        print("🔄 Continuing without Neo4j database clearing...")
+    if OFFLINE_MODE:
         neo4j_driver = None
-    
-    # Clear database at the start to ensure clean state
-    if neo4j_driver:
-        print("🗑️  Initializing clean Neo4j database...")
+        print("⏭️  Offline mode: skipping Neo4j init/clearing.")
+    else:
         try:
-            clear_neo4j_database(neo4j_driver, "initial_clear")
+            neo4j_driver = get_neo4j_driver()
+            print("✅ Neo4j driver initialized successfully")
         except Exception as e:
-            print(f"⚠️  Warning: Failed to clear Neo4j database: {e}")
+            print(f"❌ Failed to initialize Neo4j driver: {e}")
+            print("🔄 Continuing without Neo4j database clearing...")
+            neo4j_driver = None
+        
+        if neo4j_driver:
+            print("🗑️  Initializing clean Neo4j database...")
+            try:
+                clear_neo4j_database(neo4j_driver, "initial_clear")
+            except Exception as e:
+                print(f"⚠️  Warning: Failed to clear Neo4j database: {e}")
     
     for chunk_idx in range(total_chunks):
         start_ticker_idx = chunk_idx * args.chunk_size
@@ -1216,22 +1244,15 @@ def main() -> None:
         sector_groups = [g for _, g in chunk_df.groupby("sector")]
         print(f"🏭 Processing {len(sector_groups)} sectors in this chunk")
         
-        # ------ 4) parallel dispatch for current chunk ---------------
-        print(f"🔄 Launching {len(sector_groups)} sectors on {args.max_workers} CPU workers...")
-
-        with concurrent.futures.ProcessPoolExecutor(max_workers=args.max_workers) as pool:
-            futures = {
-                pool.submit(process_sector, grp, log_path): grp["sector"].iat[0]
-                for grp in sector_groups
-            }
-
-            for fut in concurrent.futures.as_completed(futures):
-                sector = futures[fut]
-                try:
-                    fut.result()           # just wait for completion
-                except Exception as err:  # capture worker failure
-                    print(f"❌ Error in sector {sector}: {err}")
-                print(f" ✅ finished sector {sector}")
+        # ------ 4) dispatch for current chunk ---------------
+        # 強制改成序列處理，避免多進程干擾/timeout
+        print(f"🔄 Sequential processing of {len(sector_groups)} sectors (max_workers ignored)...")
+        for grp in sector_groups:
+            try:
+                process_sector(grp, log_path)
+                print(f" ✅ finished sector {grp['sector'].iat[0]}")
+            except Exception as err:
+                print(f"❌ Error in sector {grp['sector'].iat[0]}: {err}")
         
         # ------ 5) Ensure all workers are terminated before database clearing ---------------
         print("🔄 Waiting for all workers to complete before database clearing...")

@@ -84,7 +84,7 @@ class ComparativeAgent:
         self,
         query: str,
         exclude_ticker: str,
-        top_k: int = 10,
+        top_k: int = 3,
         sector: str = None,
         ticker: str = None,
         use_batch_peer_query: bool = False
@@ -120,7 +120,7 @@ class ComparativeAgent:
                             WHERE node.ticker IN $peer_ticker_list AND score > $min_score
                             OPTIONAL MATCH (node)-[:HAS_VALUE]->(v:Value)
                             OPTIONAL MATCH (node)-[:EXPLAINED_BY]->(r:Reason)
-                            RETURN node.text AS text, node.metric AS metric, v.content AS value,
+                            RETURN node.metric AS metric, v.content AS value,
                                    r.content AS reason, node.ticker AS ticker,
                                    node.quarter AS quarter, score
                             ORDER BY score DESC
@@ -138,7 +138,7 @@ class ComparativeAgent:
                                 WHERE node.ticker = $peer_ticker AND score > $min_score
                                 OPTIONAL MATCH (node)-[:HAS_VALUE]->(v:Value)
                                 OPTIONAL MATCH (node)-[:EXPLAINED_BY]->(r:Reason)
-                                RETURN node.text AS text, node.metric AS metric, v.content AS value,
+                                RETURN node.metric AS metric, v.content AS value,
                                        r.content AS reason, node.ticker AS ticker,
                                        node.quarter AS quarter, score
                                 ORDER BY score DESC
@@ -160,15 +160,15 @@ class ComparativeAgent:
                         WHERE node.ticker <> $exclude_ticker AND score > $min_score
                         OPTIONAL MATCH (node)-[:HAS_VALUE]->(v:Value)
                         OPTIONAL MATCH (node)-[:EXPLAINED_BY]->(r:Reason)
-                        RETURN node.text AS text, node.metric AS metric, v.content AS value,
+                        RETURN node.metric AS metric, v.content AS value,
                                r.content AS reason, node.ticker AS ticker,
                                node.quarter AS quarter, score
                         ORDER BY score DESC
-                        LIMIT 10
+                        LIMIT 5
                         """,
                         {"topK": top_k, "vec": vec, "exclude_ticker": exclude_ticker, "min_score": 0.3},
                     )
-                    return [dict(r) for r in res]
+                    return [dict(r) for r in res][:top_k]
         except Exception:
             return []
 
@@ -186,7 +186,7 @@ class ComparativeAgent:
                     WHERE node.sector = $sector AND node.quarter = $quarter AND node.ticker <> $exclude_ticker
                     OPTIONAL MATCH (node)-[:HAS_VALUE]->(v:Value)
                     OPTIONAL MATCH (node)-[:EXPLAINED_BY]->(r:Reason)
-                    RETURN node.text AS text, node.metric AS metric, v.content AS value,
+                    RETURN node.metric AS metric, v.content AS value,
                            r.content AS reason, node.ticker AS ticker,
                            node.quarter AS quarter, node.sector AS sector, score
                     ORDER BY score DESC

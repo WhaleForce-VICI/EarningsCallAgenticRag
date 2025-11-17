@@ -80,7 +80,7 @@ class HistoricalPerformanceAgent:
             return str(obj)
 
     # ------------------------------------------------------------------
-    def get_similar_facts_by_embedding(self, fact: Dict[str, Any], ticker: str, quarter: str, top_n: int = 5) -> List[Dict[str, Any]]:
+    def get_similar_facts_by_embedding(self, fact: Dict[str, Any], ticker: str, quarter: str, top_n: int = 3) -> List[Dict[str, Any]]:
         """Find top-N most similar facts for the same ticker and type='Result' using embedding cosine similarity, fetching value via HAS_VALUE."""
         try:
             if isinstance(fact, str):

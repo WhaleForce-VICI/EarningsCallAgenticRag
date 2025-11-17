@@ -75,7 +75,7 @@ class HistoricalEarningsAgent:
     # ------------------------------------------------------------------
     # Neo4j fetch helper (simple filter – same ticker, prior quarters)
     # ------------------------------------------------------------------
-    def _fetch_past_facts(self, ticker: str, top_k: int = 10) -> List[Dict[str, Any]]:
+    def _fetch_past_facts(self, ticker: str, top_k: int = 3) -> List[Dict[str, Any]]:
         with self.driver.session() as ses:
             result = ses.run(
                 """

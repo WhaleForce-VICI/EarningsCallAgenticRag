@@ -117,19 +117,24 @@ class MainAgent:
 
     # ------------ init ----------------------------------------------------
     def __post_init__(self):
-        api_key = None
         cred_path = Path(self.credentials_file or self.credentials_path or "")
-        if cred_path and cred_path.exists():
+        if cred_path and cred_path.is_file():
             api_key = json.loads(cred_path.read_text())["openai_api_key"]
         else:
             api_key = get_openai_api_key()
         self.client = OpenAI(api_key=api_key)
 
     # ------------ internal LLM helper ------------------------------------
-    def _chat(self, prompt: str, system: str = "") -> str:
+    def _chat(self, prompt: str, system: str = "", max_tokens: int = 768) -> str:
         msgs = [{"role": "system", "content": system}] if system else []
         msgs.append({"role": "user", "content": prompt})
-        resp = self.client.chat.completions.create(model=self.model, messages=msgs, temperature=0, top_p=1)
+        resp = self.client.chat.completions.create(
+            model=self.model,
+            messages=msgs,
+            temperature=0,
+            top_p=1,
+            max_tokens=max_tokens,
+        )
         
         # Track token usage
         if hasattr(resp, 'usage') and resp.usage:
